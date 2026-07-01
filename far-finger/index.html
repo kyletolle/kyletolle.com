@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Iomesel — Drifting Clouds Prototype</title>
+<style>
+  :root { --panel-bg: rgba(18,20,26,0.82); --panel-fg: #e8e6df; --accent: #9bb4c9; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #11131a; color: var(--panel-fg);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #stage {
+    position: relative; width: 100%; max-width: 1100px; margin: 0 auto;
+    /* Intrinsic height from the map's aspect ratio (3290x2529) so the stage never
+       collapses to zero height before the image loads. This is the iOS-Safari /
+       slow-link fix: the canvas always has a real size, clouds render immediately,
+       and a slow or failed map load no longer blanks the whole prototype. */
+    aspect-ratio: 3290 / 2529;
+    background: #1a1d26;
+    /* subtle frame so the white map doesn't bleed into the page */
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 12px 40px rgba(0,0,0,0.55);
+  }
+  #map { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    display: block; user-select: none; -webkit-user-drag: none; }
+  /* Blend mode is switched at runtime (Float / Shade / Glow buttons in the panel).
+     Initial value matches the default (Float = normal) to avoid a flash before JS runs. */
+  #clouds { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    mix-blend-mode: normal; }
+  #maperr { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; color: #8b95a3; font-size: 12px; }
+
+  /* Control panel */
+  #panel {
+    position: fixed; top: 12px; right: 12px; width: 248px; z-index: 10;
+    background: var(--panel-bg); backdrop-filter: blur(6px);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+    padding: 12px 14px 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    transition: transform 0.25s ease;
+  }
+  #panel.collapsed { transform: translateX(calc(100% + 18px)); }
+  #panel h1 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    margin: 0 0 10px; padding-right: 30px; color: var(--accent); font-weight: 600; }
+  /* tappable hide button (iOS has no keyboard 'H'); ⚙ #toggle handles re-showing */
+  #hide { position: absolute; top: 8px; right: 9px; width: 30px; height: 30px; flex: none;
+    padding: 0; font-size: 16px; line-height: 1; border-radius: 7px; }
+  /* 8-point "wind from" compass: 3x3 grid, empty center */
+  #compass { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 7px; }
+  #compass button { padding: 5px 0; font-size: 10.5px; flex: none; }
+  #compass .spacer { visibility: hidden; }
+  .row { margin: 9px 0; }
+  .row label { display: flex; justify-content: space-between; font-size: 11px;
+    color: #c7c4ba; margin-bottom: 3px; }
+  .row label .val { color: #fff; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+  input[type=color] { width: 100%; height: 26px; border: none; background: none; padding: 0; cursor: pointer; }
+  .btns { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+  button { flex: 1 1 auto; background: rgba(255,255,255,0.07); color: var(--panel-fg);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 6px 8px;
+    font-size: 11px; cursor: pointer; }
+  button:hover { background: rgba(255,255,255,0.14); }
+  button.active { background: var(--accent); color: #0c0e13; border-color: var(--accent); }
+  #toggle { position: fixed; top: 12px; right: 12px; z-index: 11; width: 34px; height: 34px;
+    border-radius: 8px; display: none; }
+  #fps { position: fixed; left: 10px; bottom: 8px; font-size: 11px; color: #6b7280; z-index: 10; }
+  .hint { font-size: 10.5px; color: #8b95a3; margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <img id="map" src="assets/far-finger-map-v6.jpg" alt="Map of the Far Finger"
+         width="3290" height="2529" decoding="async" />
+    <canvas id="clouds"></canvas>
+    <div id="maperr">Map image didn't load — clouds are still running.<br>Check the asset path / network.</div>
+  </div>
+
+  <button id="toggle" title="Show controls">⚙</button>
+  <div id="panel">
+    <button id="hide" title="Hide controls" aria-label="Hide controls">✕</button>
+    <h1>Cloud Cover — Far Finger</h1>
+
+    <div class="row">
+      <label>Coverage <span class="val" id="v-coverage"></span></label>
+      <input type="range" id="coverage" min="0" max="1" step="0.01">
+    </div>
+    <div class="row">
+      <label>Cloud size <span class="val" id="v-scale"></span></label>
+      <input type="range" id="scale" min="0.4" max="4" step="0.05">
+    </div>
+    <div class="row">
+      <label>Edge softness <span class="val" id="v-soft"></span></label>
+      <input type="range" id="soft" min="0.02" max="0.6" step="0.01">
+    </div>
+    <div class="row">
+      <label>Opacity <span class="val" id="v-opacity"></span></label>
+      <input type="range" id="opacity" min="0" max="1" step="0.01">
+    </div>
+    <div class="row">
+      <label>Wind speed <span class="val" id="v-wind"></span></label>
+      <input type="range" id="wind" min="0" max="3" step="0.01">
+    </div>
+    <div class="row">
+      <label>Wind from <span class="val" id="v-dir"></span></label>
+      <input type="range" id="dir" min="0" max="360" step="1">
+      <div id="compass">
+        <button data-dir="225">NW</button>
+        <button data-dir="270">N</button>
+        <button data-dir="315">NE</button>
+        <button data-dir="180">W</button>
+        <span class="spacer"></span>
+        <button data-dir="0">E</button>
+        <button data-dir="135">SW</button>
+        <button data-dir="90">S</button>
+        <button data-dir="45">SE</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Morph (form &amp; dissipate) <span class="val" id="v-morph"></span></label>
+      <input type="range" id="morph" min="0" max="2" step="0.01">
+    </div>
+    <div class="row">
+      <label>Detail (octaves) <span class="val" id="v-octaves"></span></label>
+      <input type="range" id="octaves" min="1" max="6" step="1">
+    </div>
+    <div class="row">
+      <label>Cloud tint</label>
+      <input type="color" id="tint">
+    </div>
+
+    <div class="row" style="margin-bottom:4px"><label>Blend mode</label></div>
+    <div class="btns">
+      <button id="blend-float">Float</button>
+      <button id="blend-shade">Shade</button>
+      <button id="blend-glow">Glow</button>
+    </div>
+
+    <div class="btns">
+      <button id="pause">Pause</button>
+      <button id="reseed">New sky</button>
+    </div>
+    <div class="btns">
+      <button id="preset-soft">Gentle</button>
+      <button id="preset-storm">Brooding</button>
+      <button id="preset-wisps">Wisps</button>
+    </div>
+    <div class="hint">
+      Clouds are pure Perlin/simplex noise, generated live in your browser — nothing is
+      pre-rendered. Drag the sliders to find a look. <b>New sky</b> reseeds the noise field.
+      Swap <code>assets/toaes-map-v5.jpg</code> for your colored map anytime.
+    </div>
+  </div>
+  <div id="fps"></div>
+
+<script>
+/* ------------------------------------------------------------------ *
+ * 3D Simplex noise (self-contained, no dependencies).
+ * Adapted from the classic Stefan Gustavson / Ashima reference.
+ * 3D so clouds can drift (x,y) AND morph over time (z).
+ * ------------------------------------------------------------------ */
+function makeNoise3D(seed) {
+  // seedable PRNG (mulberry32)
+  let s = (seed >>> 0) || 1;
+  const rand = () => {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const perm = new Uint8Array(512);
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) { const j = (rand() * (i + 1)) | 0; const t = p[i]; p[i] = p[j]; p[j] = t; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+
+  const grad3 = new Float32Array([
+    1,1,0, -1,1,0, 1,-1,0, -1,-1,0,
+    1,0,1, -1,0,1, 1,0,-1, -1,0,-1,
+    0,1,1, 0,-1,1, 0,1,-1, 0,-1,-1
+  ]);
+  const F3 = 1 / 3, G3 = 1 / 6;
+
+  return function noise(xin, yin, zin) {
+    const s = (xin + yin + zin) * F3;
+    let i = Math.floor(xin + s), j = Math.floor(yin + s), k = Math.floor(zin + s);
+    const t = (i + j + k) * G3;
+    const x0 = xin - (i - t), y0 = yin - (j - t), z0 = zin - (k - t);
+    let i1, j1, k1, i2, j2, k2;
+    if (x0 >= y0) {
+      if (y0 >= z0)      { i1=1;j1=0;k1=0; i2=1;j2=1;k2=0; }
+      else if (x0 >= z0) { i1=1;j1=0;k1=0; i2=1;j2=0;k2=1; }
+      else               { i1=0;j1=0;k1=1; i2=1;j2=0;k2=1; }
+    } else {
+      if (y0 < z0)       { i1=0;j1=0;k1=1; i2=0;j2=1;k2=1; }
+      else if (x0 < z0)  { i1=0;j1=1;k1=0; i2=0;j2=1;k2=1; }
+      else               { i1=0;j1=1;k1=0; i2=1;j2=1;k2=0; }
+    }
+    const x1=x0-i1+G3, y1=y0-j1+G3, z1=z0-k1+G3;
+    const x2=x0-i2+2*G3, y2=y0-j2+2*G3, z2=z0-k2+2*G3;
+    const x3=x0-1+3*G3, y3=y0-1+3*G3, z3=z0-1+3*G3;
+    const ii=i&255, jj=j&255, kk=k&255;
+    let n0=0,n1=0,n2=0,n3=0;
+    let t0=0.6-x0*x0-y0*y0-z0*z0;
+    if (t0>0){ const gi=(perm[ii+perm[jj+perm[kk]]]%12)*3; t0*=t0; n0=t0*t0*(grad3[gi]*x0+grad3[gi+1]*y0+grad3[gi+2]*z0); }
+    let t1=0.6-x1*x1-y1*y1-z1*z1;
+    if (t1>0){ const gi=(perm[ii+i1+perm[jj+j1+perm[kk+k1]]]%12)*3; t1*=t1; n1=t1*t1*(grad3[gi]*x1+grad3[gi+1]*y1+grad3[gi+2]*z1); }
+    let t2=0.6-x2*x2-y2*y2-z2*z2;
+    if (t2>0){ const gi=(perm[ii+i2+perm[jj+j2+perm[kk+k2]]]%12)*3; t2*=t2; n2=t2*t2*(grad3[gi]*x2+grad3[gi+1]*y2+grad3[gi+2]*z2); }
+    let t3=0.6-x3*x3-y3*y3-z3*z3;
+    if (t3>0){ const gi=(perm[ii+1+perm[jj+1+perm[kk+1]]]%12)*3; t3*=t3; n3=t3*t3*(grad3[gi]*x3+grad3[gi+1]*y3+grad3[gi+2]*z3); }
+    return 32 * (n0 + n1 + n2 + n3); // ~[-1,1]
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Cloud renderer
+ * ------------------------------------------------------------------ */
+const mapImg = document.getElementById('map');
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('clouds');
+const ctx = canvas.getContext('2d');
+const fpsEl = document.getElementById('fps');
+
+// low-res offscreen buffer; upscaled (smoothed) onto the visible canvas for soft edges
+const buf = document.createElement('canvas');
+const bctx = buf.getContext('2d');
+const BUF_W = 240;            // buffer width in px (height set from aspect ratio)
+let BUF_H = 180;
+let imgData, data;
+
+let noise = makeNoise3D(1337);
+
+const params = {
+  coverage: 0.40,  // 0 = clear sky, 1 = total overcast
+  scale: 4,        // cloud feature size (lower = bigger clouds)
+  soft: 0.02,      // edge feather
+  opacity: 1.0,    // max cloud opacity
+  wind: 0.2,       // drift speed
+  dir: 235,        // wind direction (degrees)
+  morph: 0.1,      // how fast clouds form/dissipate
+  octaves: 6,      // fBm detail
+  tint: '#eef2f7'  // cloud color (pale: Float-mode default)
+};
+
+// Global drift damping. Raw sliders fed accumulated real-time seconds straight into
+// the noise domain, which made even low wind/morph values race. These tame the whole
+// slider range to a weather-like pace.
+const WIND_K = 0.15;
+const MORPH_K = 0.30;
+
+let tintRGB = hexToRgb(params.tint);
+let paused = false;
+let t = 0;          // accumulated time
+let lastT = 0;
+
+function hexToRgb(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function smoothstep(a, b, x) {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+function resize() {
+  // Drive sizing off the stage, which always has an aspect-ratio-derived height,
+  // rather than the image, which is 0-height until it loads.
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (!w || !h) return;
+  canvas.width = w; canvas.height = h;
+  const ar = h / w;
+  BUF_H = Math.max(1, Math.round(BUF_W * ar));
+  buf.width = BUF_W; buf.height = BUF_H;
+  imgData = bctx.createImageData(BUF_W, BUF_H);
+  data = imgData.data;
+  ctx.imageSmoothingEnabled = true;
+}
+
+function fbm(x, y, z, oct) {
+  let amp = 0.5, freq = 1, sum = 0, norm = 0;
+  for (let o = 0; o < oct; o++) {
+    sum += amp * noise(x * freq, y * freq, z * freq);
+    norm += amp; amp *= 0.5; freq *= 2;
+  }
+  return sum / norm; // ~[-1,1]
+}
+
+function renderClouds() {
+  const rad = params.dir * Math.PI / 180;
+  const wx = Math.cos(rad) * params.wind * t * WIND_K;
+  const wy = Math.sin(rad) * params.wind * t * WIND_K;
+  const z = t * params.morph * MORPH_K;
+  const sc = params.scale;
+  // coverage maps to a threshold: high coverage -> low threshold -> more cloud
+  const thr = 1 - params.coverage;          // 0..1 on the [0,1] noise space
+  const lo = (thr - params.soft) * 2 - 1;    // back to noise [-1,1] domain
+  const hi = (thr + params.soft) * 2 - 1;
+  const oct = params.octaves | 0;
+  const aspect = BUF_H / BUF_W;
+  let pi = 0;
+  for (let py = 0; py < BUF_H; py++) {
+    const ny = (py / BUF_H) * sc * aspect + wy;
+    for (let px = 0; px < BUF_W; px++) {
+      const nx = (px / BUF_W) * sc + wx;
+      const v = fbm(nx, ny, z, oct);              // [-1,1]
+      const a = smoothstep(lo, hi, v) * params.opacity;
+      data[pi]   = tintRGB[0];
+      data[pi+1] = tintRGB[1];
+      data[pi+2] = tintRGB[2];
+      data[pi+3] = (a * 255) | 0;
+      pi += 4;
+    }
+  }
+  bctx.putImageData(imgData, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(buf, 0, 0, canvas.width, canvas.height);
+}
+
+let frames = 0, fpsAccum = 0;
+function loop(now) {
+  const dt = lastT ? (now - lastT) / 1000 : 0;
+  lastT = now;
+  if (!paused) t += dt;
+  renderClouds();
+  // fps
+  frames++; fpsAccum += dt;
+  if (fpsAccum >= 0.5) { fpsEl.textContent = Math.round(frames / fpsAccum) + ' fps · ' + BUF_W + '×' + BUF_H; frames = 0; fpsAccum = 0; }
+  requestAnimationFrame(loop);
+}
+
+/* ------------------------------------------------------------------ *
+ * UI wiring
+ * ------------------------------------------------------------------ */
+function bind(id, key, fmt) {
+  const el = document.getElementById(id);
+  const out = document.getElementById('v-' + id);
+  el.value = params[key];
+  const show = () => { if (out) out.textContent = fmt ? fmt(params[key]) : params[key]; };
+  el.addEventListener('input', () => {
+    params[key] = (el.type === 'range') ? parseFloat(el.value) : el.value;
+    if (key === 'tint') tintRGB = hexToRgb(params.tint);
+    show();
+  });
+  show();
+}
+bind('coverage', 'coverage', v => Math.round(v * 100) + '%');
+bind('scale', 'scale', v => v.toFixed(2));
+bind('soft', 'soft', v => v.toFixed(2));
+bind('opacity', 'opacity', v => Math.round(v * 100) + '%');
+bind('wind', 'wind', v => v.toFixed(2));
+// Internal `dir` is the noise-domain angle; the UI speaks compass "wind from".
+// Mapping: from-N => clouds drift S, etc. dir = (fromBearing + 270) mod 360.
+const COMPASS_FROM = {270:'N',315:'NE',0:'E',45:'SE',90:'S',135:'SW',180:'W',225:'NW'};
+bind('dir', 'dir', v => COMPASS_FROM[Math.round(v) % 360] || (Math.round(v) + '°'));
+bind('morph', 'morph', v => v.toFixed(2));
+bind('octaves', 'octaves', v => String(v | 0));
+bind('tint', 'tint');
+
+const pauseBtn = document.getElementById('pause');
+pauseBtn.addEventListener('click', () => {
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'Play' : 'Pause';
+  pauseBtn.classList.toggle('active', paused);
+});
+document.getElementById('reseed').addEventListener('click', () => {
+  noise = makeNoise3D((Math.random() * 1e9) | 0);
+});
+
+function applyPreset(p) {
+  Object.assign(params, p);
+  tintRGB = hexToRgb(params.tint);
+  // refresh all controls
+  ['coverage','scale','soft','opacity','wind','dir','morph','octaves'].forEach(k => {
+    const el = document.getElementById(k); const out = document.getElementById('v-' + k);
+    el.value = params[k];
+    el.dispatchEvent(new Event('input'));
+  });
+  document.getElementById('tint').value = params.tint;
+  document.getElementById('tint').dispatchEvent(new Event('input'));
+}
+/* Preset tints are dark — they read as shade under the multiply blend over the
+   white map. Lighten them (and drop multiply) once a colored map is in. */
+document.getElementById('preset-soft').addEventListener('click', () => applyPreset(
+  { coverage: 0.42, scale: 1.2, soft: 0.28, opacity: 0.5, wind: 0.45, dir: 235, morph: 0.25, octaves: 3, tint: '#525b6e' }));
+document.getElementById('preset-storm').addEventListener('click', () => applyPreset(
+  { coverage: 0.72, scale: 1.7, soft: 0.16, opacity: 0.8, wind: 1.1, dir: 250, morph: 0.6, octaves: 4, tint: '#2a303c' }));
+document.getElementById('preset-wisps').addEventListener('click', () => applyPreset(
+  { coverage: 0.28, scale: 2.4, soft: 0.35, opacity: 0.42, wind: 0.8, dir: 200, morph: 0.45, octaves: 2, tint: '#5e6678' }));
+
+/* ---- Blend mode switch ---------------------------------------------- *
+ * Float = normal (luminous clouds above the map), Shade = multiply
+ * (cloud-shadow darkening the terrain), Glow = screen (bright haze / fog).
+ * Each mode also applies a tint + opacity that actually reads in that mode. */
+const blendModes = {
+  float: { mode: 'normal',   tint: '#eef2f7', opacity: 1.0  },
+  shade: { mode: 'multiply', tint: '#414a5c', opacity: 0.60 },
+  glow:  { mode: 'screen',   tint: '#cfd8e6', opacity: 0.70 },
+};
+function setBlend(key) {
+  const b = blendModes[key];
+  canvas.style.mixBlendMode = b.mode;
+  params.tint = b.tint; params.opacity = b.opacity;
+  tintRGB = hexToRgb(params.tint);
+  const op = document.getElementById('opacity'); op.value = params.opacity; op.dispatchEvent(new Event('input'));
+  const tn = document.getElementById('tint');    tn.value = params.tint;    tn.dispatchEvent(new Event('input'));
+  ['float','shade','glow'].forEach(k =>
+    document.getElementById('blend-' + k).classList.toggle('active', k === key));
+}
+document.getElementById('blend-float').addEventListener('click', () => setBlend('float'));
+document.getElementById('blend-shade').addEventListener('click', () => setBlend('shade'));
+document.getElementById('blend-glow').addEventListener('click',  () => setBlend('glow'));
+setBlend('float');   // default now that the map has color underneath
+
+/* ---- Wind-from compass: buttons set the dir slider; highlight the active point -- */
+function updateCompassActive() {
+  const d = ((Math.round(params.dir) % 360) + 360) % 360;
+  document.querySelectorAll('#compass button').forEach(b =>
+    b.classList.toggle('active', (+b.dataset.dir % 360) === d));
+}
+document.querySelectorAll('#compass button').forEach(b => {
+  b.addEventListener('click', () => {
+    const el = document.getElementById('dir');
+    el.value = b.dataset.dir;
+    el.dispatchEvent(new Event('input'));
+  });
+});
+document.getElementById('dir').addEventListener('input', updateCompassActive);
+updateCompassActive();
+
+// collapse panel
+const panel = document.getElementById('panel');
+const toggle = document.getElementById('toggle');
+document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'h') collapse(); });
+function collapse() {
+  panel.classList.toggle('collapsed');
+  toggle.style.display = panel.classList.contains('collapsed') ? 'block' : 'none';
+}
+toggle.addEventListener('click', collapse);
+document.getElementById('hide').addEventListener('click', collapse);
+
+window.addEventListener('resize', resize);
+// The stage is sized by CSS aspect-ratio, so we can size the canvas immediately —
+// no longer gated on the map image's load event.
+resize();
+mapImg.addEventListener('load', resize);
+mapImg.addEventListener('error', () => { document.getElementById('maperr').style.display = 'flex'; });
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
