@@ -4,46 +4,101 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Colors — Kyle Tolle</title>
-<meta name="description" content="A little color playground. Random background colors, hex and RGB, and the space between two colors." />
+<meta name="description" content="A little color playground. Random background colors, a history grid, hex/RGB conversion, and the color between two colors." />
 <style>
   /* Self-contained, dependency-free, no build step. The whole point of this
      revival is durability: nothing here reaches out to a CDN or a server, so
      there is no runtime to sunset. The page IS the toy. */
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html, body { margin: 0; }
   body {
-    /* --bg is the random color; text color is chosen for contrast at runtime. */
+    /* --bg is the current color; text color is chosen for contrast at runtime. */
     background: var(--bg, #10294d);
     color: var(--fg, #ffffff);
     font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-    display: flex; flex-direction: column; min-height: 100%;
+    min-height: 100vh; display: flex; flex-direction: column;
     transition: background 0.35s ease, color 0.35s ease;
     text-align: center;
     -webkit-tap-highlight-color: transparent;
   }
-  main {
-    flex: 1; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 0.4em; padding: 24px; cursor: pointer;
-    user-select: none;
+  /* --- hero: the random background color --- */
+  #stage {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 0.4em; padding: 14vh 24px 8vh;
+    cursor: pointer; user-select: none;
   }
   .hex {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: clamp(2.8rem, 14vw, 8rem); font-weight: 700;
+    font-size: clamp(2.8rem, 13vw, 7rem); font-weight: 700;
     letter-spacing: 0.04em; margin: 0; line-height: 1;
   }
   .rgb { font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: clamp(0.9rem, 3.5vw, 1.4rem); opacity: 0.8; margin: 0; }
-  .hint { font-size: 0.85rem; opacity: 0.55; margin-top: 1.6em;
-    max-width: 32ch; line-height: 1.5; }
+    font-size: clamp(0.9rem, 3.5vw, 1.3rem); opacity: 0.8; margin: 0; }
+  .hint { font-size: 0.85rem; opacity: 0.55; margin-top: 1.4em;
+    max-width: 34ch; line-height: 1.5; }
   .copied { font-size: 0.85rem; opacity: 0; margin-top: 0.4em;
     transition: opacity 0.15s ease; }
   .copied.show { opacity: 0.8; }
-  footer { padding: 16px; font-size: 0.75rem; opacity: 0.55; }
-  footer a { color: inherit; }
-  /* Respect users who don't want motion. */
-  @media (prefers-reduced-motion: reduce) {
-    body { transition: none; }
+
+  /* --- sections --- */
+  section {
+    width: min(680px, calc(100% - 32px)); margin: 0 auto 22px;
+    background: rgba(0,0,0,0.22); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px; padding: 18px 20px 20px; backdrop-filter: blur(4px);
   }
+  h2 { font-size: 0.85rem; letter-spacing: 0.14em; text-transform: uppercase;
+    opacity: 0.75; margin: 0 0 12px; font-weight: 600; }
+  .note { font-size: 0.8rem; opacity: 0.6; margin: 10px 0 0; line-height: 1.5; }
+
+  /* history grid */
+  #grid { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  #grid button {
+    width: 34px; height: 34px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.25);
+    cursor: pointer; padding: 0; transition: transform 0.1s ease;
+  }
+  #grid button:hover { transform: scale(1.18); }
+  #grid-empty { font-size: 0.85rem; opacity: 0.55; }
+  #clear { margin-top: 12px; }
+
+  /* shared controls */
+  button.ctl, input[type="text"] {
+    font: inherit; font-size: 0.9rem; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.1); color: inherit; padding: 7px 12px;
+  }
+  button.ctl { cursor: pointer; }
+  button.ctl:hover { background: rgba(255,255,255,0.2); }
+  input[type="text"] {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    width: 12em; max-width: 100%; text-align: center;
+  }
+  input[type="text"]::placeholder { color: inherit; opacity: 0.45; }
+  input[type="color"] {
+    width: 44px; height: 36px; border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 8px; background: none; cursor: pointer; padding: 2px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    justify-content: center; }
+
+  /* converter */
+  #conv-out { font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 1rem; margin: 12px 0 0; min-height: 1.4em; }
+  #conv-swatch { display: inline-block; width: 1em; height: 1em;
+    border-radius: 4px; border: 1px solid rgba(255,255,255,0.35);
+    vertical-align: -0.15em; margin-right: 0.45em; }
+
+  /* between */
+  #strip { display: flex; height: 44px; border-radius: 8px; overflow: hidden;
+    margin-top: 14px; border: 1px solid rgba(255,255,255,0.2); }
+  #strip div { flex: 1; cursor: pointer; position: relative; }
+  #strip div.mid { flex: 1.6; outline: 2px solid rgba(255,255,255,0.75);
+    outline-offset: -2px; z-index: 1; }
+  #between-out { font-family: ui-monospace, Menlo, Consolas, monospace;
+    margin: 10px 0 0; font-size: 1rem; }
+
+  footer { padding: 16px; font-size: 0.75rem; opacity: 0.55; margin-top: auto; }
+  footer a { color: inherit; }
+  @media (prefers-reduced-motion: reduce) { body { transition: none; } }
 </style>
 </head>
 <body>
@@ -53,23 +108,69 @@
     <p class="copied" id="copied">copied</p>
     <p class="hint">Click, tap, or press space for a new color. Click the hex to copy it.</p>
   </main>
+
+  <section id="history">
+    <h2>Every color you've rolled</h2>
+    <div id="grid"><span id="grid-empty">Your colors will collect here as you generate them.</span></div>
+    <button class="ctl" id="clear" hidden>Clear history</button>
+    <p class="note">Stored in your browser only (localStorage). Click a swatch to bring it back.</p>
+  </section>
+
+  <section id="converter">
+    <h2>Hex &harr; RGB</h2>
+    <div class="row">
+      <input type="text" id="conv-in" placeholder="#8af32e or 138, 243, 46"
+        autocomplete="off" spellcheck="false" />
+    </div>
+    <p id="conv-out">&nbsp;</p>
+  </section>
+
+  <section id="between">
+    <h2>The color between two colors</h2>
+    <div class="row">
+      <input type="color" id="c1" value="#10294d" />
+      <input type="text" id="c1hex" value="#10294D" autocomplete="off" spellcheck="false" style="width:7em" />
+      <span style="opacity:0.6">&harr;</span>
+      <input type="text" id="c2hex" value="#8AF32E" autocomplete="off" spellcheck="false" style="width:7em" />
+      <input type="color" id="c2" value="#8af32e" />
+    </div>
+    <div id="strip"></div>
+    <p id="between-out"></p>
+    <p class="note">Click any band to copy it. The outlined band is the midpoint.</p>
+  </section>
+
   <footer>
     A <a href="https://kyletolle.com">kyletolle.com</a> project &middot;
     revived from a retired serverless experiment
   </footer>
 
 <script>
-  // --- pure functions: the entire color logic that a Lambda used to serve ---
+  // --- pure color functions: everything a Lambda used to serve ---
   function randomColor() {
     const n = Math.floor(Math.random() * 0x1000000);
-    return {
-      r: (n >> 16) & 0xff,
-      g: (n >> 8) & 0xff,
-      b: n & 0xff,
-    };
+    return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
   }
   function toHex({ r, g, b }) {
     return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+  }
+  // Accepts "#abc", "#aabbcc", "aabbcc", "rgb(1,2,3)", "1, 2, 3".
+  function parseColor(s) {
+    s = s.trim();
+    let m = s.match(/^#?([0-9a-f]{6})$/i);
+    if (m) { const n = parseInt(m[1], 16);
+      return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff }; }
+    m = s.match(/^#?([0-9a-f]{3})$/i);
+    if (m) { const [a, b, c] = m[1];
+      return { r: parseInt(a + a, 16), g: parseInt(b + b, 16), b: parseInt(c + c, 16) }; }
+    m = s.match(/^(?:rgb\s*\(\s*)?(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)?$/i);
+    if (m) { const [r, g, b] = m.slice(1).map(Number);
+      if (r < 256 && g < 256 && b < 256) return { r, g, b }; }
+    return null;
+  }
+  function mix(a, b, t) {
+    return { r: Math.round(a.r + (b.r - a.r) * t),
+             g: Math.round(a.g + (b.g - a.g) * t),
+             b: Math.round(a.b + (b.b - a.b) * t) };
   }
   // WCAG relative luminance, so text stays readable on any background.
   function luminance({ r, g, b }) {
@@ -79,40 +180,118 @@
     });
     return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
   }
+  async function copyText(t, feedbackEl) {
+    try {
+      await navigator.clipboard.writeText(t);
+      if (feedbackEl) { feedbackEl.classList.add('show');
+        setTimeout(() => feedbackEl.classList.remove('show'), 900); }
+    } catch (_) { /* clipboard blocked; no-op */ }
+  }
 
+  // --- hero: random background ---
   const stage = document.getElementById('stage');
   const hexEl = document.getElementById('hex');
   const rgbEl = document.getElementById('rgb');
   const copiedEl = document.getElementById('copied');
   let current = { r: 16, g: 41, b: 77 };
 
-  function apply(c) {
+  function apply(c, { record = true } = {}) {
     current = c;
     const hex = toHex(c);
     document.body.style.setProperty('--bg', hex);
     document.body.style.setProperty('--fg', luminance(c) > 0.35 ? '#111111' : '#ffffff');
     hexEl.textContent = hex;
     rgbEl.textContent = `rgb(${c.r}, ${c.g}, ${c.b})`;
+    if (record) remember(hex);
   }
   function reroll() { apply(randomColor()); }
 
-  async function copyHex(e) {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(toHex(current));
-      copiedEl.classList.add('show');
-      setTimeout(() => copiedEl.classList.remove('show'), 900);
-    } catch (_) { /* clipboard blocked; no-op */ }
-  }
-
   stage.addEventListener('click', reroll);
-  hexEl.addEventListener('click', copyHex);
+  hexEl.addEventListener('click', (e) => { e.stopPropagation(); copyText(toHex(current), copiedEl); });
   document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') { e.preventDefault(); reroll(); }
+    if (e.code === 'Space' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+      e.preventDefault(); reroll();
+    }
   });
+
+  // --- history grid (the old random_color_viewer, but yours, in your browser) ---
+  const KEY = 'colors.history';
+  const CAP = 240;
+  const grid = document.getElementById('grid');
+  const gridEmpty = document.getElementById('grid-empty');
+  const clearBtn = document.getElementById('clear');
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(KEY)) || []; } catch (_) {}
+
+  function renderGrid() {
+    grid.querySelectorAll('button').forEach(b => b.remove());
+    const any = history.length > 0;
+    gridEmpty.hidden = any; clearBtn.hidden = !any;
+    for (const hex of history) {
+      const b = document.createElement('button');
+      b.style.background = hex; b.title = hex;
+      b.addEventListener('click', () => { apply(parseColor(hex), { record: false }); copyText(hex); });
+      grid.appendChild(b);
+    }
+  }
+  function remember(hex) {
+    history.push(hex);
+    if (history.length > CAP) history = history.slice(-CAP);
+    try { localStorage.setItem(KEY, JSON.stringify(history)); } catch (_) {}
+    renderGrid();
+  }
+  clearBtn.addEventListener('click', () => {
+    history = [];
+    try { localStorage.removeItem(KEY); } catch (_) {}
+    renderGrid();
+  });
+
+  // --- hex <-> rgb converter ---
+  const convIn = document.getElementById('conv-in');
+  const convOut = document.getElementById('conv-out');
+  convIn.addEventListener('input', () => {
+    const c = parseColor(convIn.value);
+    if (!c) { convOut.innerHTML = convIn.value.trim() ? '&hellip;' : '&nbsp;'; return; }
+    const hex = toHex(c);
+    convOut.innerHTML = `<span id="conv-swatch" style="background:${hex}"></span>` +
+      `${hex} &nbsp;=&nbsp; rgb(${c.r}, ${c.g}, ${c.b})`;
+  });
+
+  // --- the color between two colors ---
+  const c1 = document.getElementById('c1'), c2 = document.getElementById('c2');
+  const c1hex = document.getElementById('c1hex'), c2hex = document.getElementById('c2hex');
+  const strip = document.getElementById('strip');
+  const betweenOut = document.getElementById('between-out');
+  const STEPS = 7; // odd, so the exact midpoint is a band
+
+  function renderBetween() {
+    const a = parseColor(c1hex.value), b = parseColor(c2hex.value);
+    if (!a || !b) return;
+    strip.innerHTML = '';
+    for (let i = 0; i < STEPS; i++) {
+      const t = i / (STEPS - 1);
+      const hex = toHex(mix(a, b, t));
+      const d = document.createElement('div');
+      d.style.background = hex; d.title = hex + ' (click to copy)';
+      if (i === (STEPS - 1) / 2) d.className = 'mid';
+      d.addEventListener('click', () => copyText(hex));
+      strip.appendChild(d);
+    }
+    betweenOut.textContent = 'midpoint: ' + toHex(mix(a, b, 0.5));
+  }
+  function syncPair(picker, text) {
+    picker.addEventListener('input', () => { text.value = picker.value.toUpperCase(); renderBetween(); });
+    text.addEventListener('input', () => {
+      const c = parseColor(text.value);
+      if (c) { picker.value = toHex(c).toLowerCase(); renderBetween(); }
+    });
+  }
+  syncPair(c1, c1hex); syncPair(c2, c2hex);
+  renderBetween();
 
   // First random color on load.
   reroll();
+  renderGrid();
 </script>
 </body>
 </html>

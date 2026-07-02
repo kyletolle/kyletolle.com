@@ -1,0 +1,2 @@
+# Keep docs out of the public deploy (built-ins already drop .git, .DS_Store).
+README.md
