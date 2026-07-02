@@ -57,6 +57,17 @@
     opacity: 0.65; font-family: ui-monospace, Menlo, Consolas, monospace; }
   #log li { margin: 3px 0; }
 
+  /* cloud-roll receipt */
+  #receipt { margin-top: 1.2em; max-width: min(520px, 90vw); }
+  #receipt-line { font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.85rem; color: #8af32e; margin: 0 0 6px; }
+  #receipt details { font-size: 0.8rem; opacity: 0.85; }
+  #receipt summary { cursor: pointer; opacity: 0.7; }
+  #receipt pre { text-align: left; background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+    padding: 10px 12px; overflow-x: auto; font-size: 0.72rem; line-height: 1.5;
+    margin: 8px 0 0; }
+
   footer { padding: 16px; font-size: 0.75rem; opacity: 0.55; }
   footer a { color: #8af32e; }
 </style>
@@ -76,11 +87,22 @@
       <input type="text" id="custom" placeholder="3d8+1d4+2" autocomplete="off"
         spellcheck="false" />
       <button class="go" id="roll">Roll</button>
+      <button id="cloud" title="Same dice, different computer: a Cloudflare Worker rolls for you">&#9729;&#65039; Cloud roll</button>
+    </div>
+
+    <div id="receipt" hidden>
+      <p id="receipt-line"></p>
+      <details>
+        <summary>show the API receipt</summary>
+        <pre id="receipt-json"></pre>
+      </details>
     </div>
 
     <p class="hint">The URL is the roll: <code>/random/#2d6+3</code> parses the
       hash as dice notation and rolls it on load. Share a link, share a roll.
-      Space rerolls.</p>
+      Space rerolls. The <strong>&#9729;&#65039; Cloud roll</strong> button asks a
+      <a href="https://roll.nullsix.workers.dev/" style="color:#8af32e">tiny dice API</a>
+      running on Cloudflare's edge to roll instead &mdash; and shows you the receipt.</p>
 
     <ol id="log" reversed></ol>
   </main>
@@ -144,7 +166,12 @@
   const customEl = document.getElementById('custom');
   let currentNotation = '2d6';
 
-  function render(notation, result) {
+  const receiptEl = document.getElementById('receipt');
+  const receiptLine = document.getElementById('receipt-line');
+  const receiptJson = document.getElementById('receipt-json');
+
+  function render(notation, result, { cloud = false } = {}) {
+    if (!cloud) receiptEl.hidden = true; // local rolls clear the cloud receipt
     notationEl.textContent = notation;
     totalEl.textContent = result.total;
     breakdownEl.innerHTML = result.detail.map(t => {
@@ -157,7 +184,7 @@
       return `<span>${sign}${t.count}d${t.sides}:</span> ${dice}`;
     }).join(' &nbsp; ').replace(/^<span>\+/, '<span>'); // drop leading +
     const li = document.createElement('li');
-    li.textContent = `${notation} → ${result.total}`;
+    li.textContent = `${cloud ? '☁️ ' : ''}${notation} → ${result.total}`;
     logEl.prepend(li);
     while (logEl.children.length > 12) logEl.lastChild.remove();
   }
@@ -174,6 +201,47 @@
     render(currentNotation, roll(p.terms));
   }
 
+  // --- cloud roll: same dice, rolled by a Cloudflare Worker, receipt shown ---
+  const API = 'https://roll.nullsix.workers.dev';
+
+  async function doCloudRoll(notation) {
+    const p = parse(notation); // validate locally first: no wasted round-trips
+    if (p.error) { errorEl.textContent = p.error; return; }
+    errorEl.textContent = '';
+    currentNotation = notation.replace(/\s+/g, '').toLowerCase();
+    if ('#' + currentNotation !== location.hash) {
+      history.replaceState(null, '', '#' + currentNotation);
+    }
+    const url = `${API}/${currentNotation}`;
+    const t0 = performance.now();
+    let data;
+    try {
+      const res = await fetch(url);
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    } catch (e) {
+      errorEl.textContent = `cloud unreachable (${e.message}) — local dice still work`;
+      return;
+    }
+    const ms = Math.round(performance.now() - t0);
+    // Map the API's detail shape back into the renderer's term shape.
+    const detail = data.detail.map((d) => {
+      if ('modifier' in d) {
+        return { kind: 'flat', sign: d.modifier < 0 ? -1 : 1, value: Math.abs(d.modifier) };
+      }
+      const m = d.dice.match(/^(-)?(\d+)d(\d+)$/);
+      return { kind: 'dice', sign: m[1] ? -1 : 1,
+               count: +m[2], sides: +m[3], rolls: d.rolls };
+    });
+    render(data.notation, { total: data.total, detail }, { cloud: true });
+    // colo = the datacenter that rolled; city = where the request came from.
+    const where = data.edge?.colo || 'the edge';
+    const near = data.edge?.city ? ` · saw you near ${data.edge.city}` : '';
+    receiptLine.textContent = `☁️ rolled at Cloudflare ${where} · ${ms}ms round trip${near}`;
+    receiptJson.textContent = `GET ${url}\n\n` + JSON.stringify(data, null, 2);
+    receiptEl.hidden = false;
+  }
+
   // --- wiring ---
   totalEl.addEventListener('click', () => doRoll(currentNotation));
   document.addEventListener('keydown', (e) => {
@@ -188,6 +256,8 @@
     b.addEventListener('click', () => doRoll(b.dataset.n)));
   document.getElementById('roll').addEventListener('click', () =>
     doRoll(customEl.value || currentNotation));
+  document.getElementById('cloud').addEventListener('click', () =>
+    doCloudRoll(customEl.value || currentNotation));
   window.addEventListener('hashchange', () =>
     doRoll(decodeURIComponent(location.hash.slice(1)) || '2d6', { setHash: false }));
 
