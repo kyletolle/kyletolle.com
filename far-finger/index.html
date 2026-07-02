@@ -232,7 +232,7 @@ const params = {
   coverage: 0.40,  // 0 = clear sky, 1 = total overcast
   scale: 4,        // cloud feature size (lower = bigger clouds)
   soft: 0.02,      // edge feather
-  opacity: 1.0,    // max cloud opacity
+  opacity: 0.95,   // max cloud opacity (95%: a hint of see-through keeps them cloud-like)
   wind: 0.2,       // drift speed
   dir: 235,        // wind direction (degrees)
   morph: 0.1,      // how fast clouds form/dissipate
@@ -390,7 +390,7 @@ document.getElementById('preset-wisps').addEventListener('click', () => applyPre
  * (cloud-shadow darkening the terrain), Glow = screen (bright haze / fog).
  * Each mode also applies a tint + opacity that actually reads in that mode. */
 const blendModes = {
-  float: { mode: 'normal',   tint: '#eef2f7', opacity: 1.0  },
+  float: { mode: 'normal',   tint: '#eef2f7', opacity: 0.95 },
   shade: { mode: 'multiply', tint: '#414a5c', opacity: 0.60 },
   glow:  { mode: 'screen',   tint: '#cfd8e6', opacity: 0.70 },
 };

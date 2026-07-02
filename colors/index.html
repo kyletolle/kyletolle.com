@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Colors — Kyle Tolle</title>
+<meta name="description" content="A little color playground. Random background colors, hex and RGB, and the space between two colors." />
+<style>
+  /* Self-contained, dependency-free, no build step. The whole point of this
+     revival is durability: nothing here reaches out to a CDN or a server, so
+     there is no runtime to sunset. The page IS the toy. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    /* --bg is the random color; text color is chosen for contrast at runtime. */
+    background: var(--bg, #10294d);
+    color: var(--fg, #ffffff);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; min-height: 100%;
+    transition: background 0.35s ease, color 0.35s ease;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 0.4em; padding: 24px; cursor: pointer;
+    user-select: none;
+  }
+  .hex {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: clamp(2.8rem, 14vw, 8rem); font-weight: 700;
+    letter-spacing: 0.04em; margin: 0; line-height: 1;
+  }
+  .rgb { font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: clamp(0.9rem, 3.5vw, 1.4rem); opacity: 0.8; margin: 0; }
+  .hint { font-size: 0.85rem; opacity: 0.55; margin-top: 1.6em;
+    max-width: 32ch; line-height: 1.5; }
+  .copied { font-size: 0.85rem; opacity: 0; margin-top: 0.4em;
+    transition: opacity 0.15s ease; }
+  .copied.show { opacity: 0.8; }
+  footer { padding: 16px; font-size: 0.75rem; opacity: 0.55; }
+  footer a { color: inherit; }
+  /* Respect users who don't want motion. */
+  @media (prefers-reduced-motion: reduce) {
+    body { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <main id="stage" title="Click, tap, or press space for a new color">
+    <p class="hex" id="hex">#10294D</p>
+    <p class="rgb" id="rgb">rgb(16, 41, 77)</p>
+    <p class="copied" id="copied">copied</p>
+    <p class="hint">Click, tap, or press space for a new color. Click the hex to copy it.</p>
+  </main>
+  <footer>
+    A <a href="https://kyletolle.com">kyletolle.com</a> project &middot;
+    revived from a retired serverless experiment
+  </footer>
+
+<script>
+  // --- pure functions: the entire color logic that a Lambda used to serve ---
+  function randomColor() {
+    const n = Math.floor(Math.random() * 0x1000000);
+    return {
+      r: (n >> 16) & 0xff,
+      g: (n >> 8) & 0xff,
+      b: n & 0xff,
+    };
+  }
+  function toHex({ r, g, b }) {
+    return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+  }
+  // WCAG relative luminance, so text stays readable on any background.
+  function luminance({ r, g, b }) {
+    const a = [r, g, b].map(v => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
+  }
+
+  const stage = document.getElementById('stage');
+  const hexEl = document.getElementById('hex');
+  const rgbEl = document.getElementById('rgb');
+  const copiedEl = document.getElementById('copied');
+  let current = { r: 16, g: 41, b: 77 };
+
+  function apply(c) {
+    current = c;
+    const hex = toHex(c);
+    document.body.style.setProperty('--bg', hex);
+    document.body.style.setProperty('--fg', luminance(c) > 0.35 ? '#111111' : '#ffffff');
+    hexEl.textContent = hex;
+    rgbEl.textContent = `rgb(${c.r}, ${c.g}, ${c.b})`;
+  }
+  function reroll() { apply(randomColor()); }
+
+  async function copyHex(e) {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(toHex(current));
+      copiedEl.classList.add('show');
+      setTimeout(() => copiedEl.classList.remove('show'), 900);
+    } catch (_) { /* clipboard blocked; no-op */ }
+  }
+
+  stage.addEventListener('click', reroll);
+  hexEl.addEventListener('click', copyHex);
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); reroll(); }
+  });
+
+  // First random color on load.
+  reroll();
+</script>
+</body>
+</html>
