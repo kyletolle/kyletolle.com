@@ -24,10 +24,11 @@ if (!location.pathname.endsWith("/") && !location.pathname.endsWith(".html"))
     background: #1e2126; color: #e8eaed; border: 1px solid #2f343b;
     border-radius: 8px; font: inherit;
   }
-  select, input[type=text] {
+  select, input[type=text], input[type=password] {
     font: inherit; padding: 7px 10px; border-radius: 8px;
     background: #1e2126; color: #e8eaed; border: 1px solid #3a3f47;
   }
+  #cloudkey { width: 160px; }
   label.ctl { display: inline-flex; align-items: center; gap: 6px; color: #b0b4b9; font-size: 13px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
   button {
@@ -128,7 +129,8 @@ if (!location.pathname.endsWith("/") && !location.pathname.endsWith(".html"))
         <option value="q4f16">q4f16 (154 MB)</option>
         <option value="q4">q4 (305 MB)</option>
       </select></label>
-      <span class="ctl">downloads once, then cached offline</span>
+      <label class="ctl hidden" id="cloudKeyCtl">Password <input type="password" id="cloudkey" autocomplete="off" placeholder="cloud access"></label>
+      <span class="ctl" id="dtypeHint">downloads once, then cached offline</span>
     </div>
     <progress id="dlbar" max="1" value="0" style="display:none"></progress>
   </div>

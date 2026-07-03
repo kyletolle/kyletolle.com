@@ -389,17 +389,25 @@ function realTimings(spanWords, apiWords) {
   if (!apiWords.length || apiWords.length !== spanWords.length) return null;
   return apiWords.map(w => ({ start: w.start, end: w.end }));
 }
+const AUTH_MSG = "cloud password rejected — check the Password field";
 async function cloudSynth(myJob) {
   const voice = $("#voice").value || "Scarlett";
+  // The /tts proxy (Cloudflare Worker) holds the Unreal key and gates on a
+  // password; empty pass → Worker returns 401, handled below.
+  const pass = $("#cloudkey") ? $("#cloudkey").value : "";
+  let authFailed = false;
   for (let i = 0; i < myJob.n; i++) {
     if (job !== myJob) return;                 // superseded by a newer speak
     status(`synthesizing ${i + 1}/${myJob.n}…`);
     const chunkText = myJob.chunks[i].words.join(" ");
     try {
+      if (authFailed) throw new Error(AUTH_MSG);   // gate already rejected — stop hammering it
       const r = await fetch("tts", {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${pass}` },
         body: JSON.stringify({ text: chunkText, voice }),
       });
+      if (r.status === 401 || r.status === 403) { authFailed = true; throw new Error(AUTH_MSG); }
       const data = await r.json();
       if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
       if (job !== myJob) return;
@@ -411,14 +419,15 @@ async function cloudSynth(myJob) {
     } catch (e) {
       if (job !== myJob) return;
       log(`chunk ${i + 1} FAILED (skipping): ${e.message}`);
+      if (authFailed) status(AUTH_MSG);
       myJob.durations[i] = 0.2;
       myJob.chunks[i]._timings = null;
-      myJob.resolvers[i](encodeWav(new Float32Array(4800), 24000));
+      myJob.resolvers[i](encodeWav(new Float32Array(4800), 24000));   // resolve, so nothing downstream hangs
     }
     $("#scrub").max = totalKnown() || 0;
     $("#time").textContent = `${fmt(globalTime())} / ${fmt(totalKnown())}`;
   }
-  if (job === myJob) { status(""); myJob.doneResolve(); }
+  if (job === myJob) { status(authFailed ? AUTH_MSG : ""); myJob.doneResolve(); }
 }
 
 /* ---- speak ---- */
@@ -509,6 +518,8 @@ $("#clip").onclick = async () => {
 function onEngineChange() {
   const cloud = isCloud();
   $("#dtypeCtl").classList.toggle("hidden", cloud);
+  $("#dtypeHint").classList.toggle("hidden", cloud);   // "downloads once" is a kokoro-only note
+  $("#cloudKeyCtl").classList.toggle("hidden", !cloud);
   if (cloud) {
     populateVoices(UNREAL_VOICES, localStorage.getItem("reader.cloudVoice") || "Scarlett");
     status("cloud engine (Unreal Speech) — no download");
@@ -520,6 +531,10 @@ function onEngineChange() {
 $("#device").onchange = onEngineChange;
 $("#dtype").onchange = () => pairDtype(false);
 $("#voice").onchange = () => localStorage.setItem(isCloud() ? "reader.cloudVoice" : "reader.voice", $("#voice").value);
+// Cloud access password: persisted same-origin so it survives reloads (it only
+// gates a TTS proxy, not a high-value secret). Sent as a Bearer header in cloudSynth.
+$("#cloudkey").value = localStorage.getItem("reader.cloudPass") || "";
+$("#cloudkey").oninput = () => localStorage.setItem("reader.cloudPass", $("#cloudkey").value);
 $("#pane").addEventListener("click", e => {           // click any word → jump & play
   const s = e.target.closest(".w");
   if (!s) return;
