@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reader — spike</title>
+<script>
+// Relative imports (./chunker.js, ./worker.js) need a trailing slash on the
+// directory URL; some proxies serve the bare path without redirecting.
+if (!location.pathname.endsWith("/") && !location.pathname.endsWith(".html"))
+  location.replace(location.pathname + "/" + location.search + location.hash);
+</script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.5 -apple-system, system-ui, sans-serif;
+    max-width: 780px; margin: 0 auto; padding: 24px;
+    background: #14161a; color: #e8eaed;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; color: #9aa0a6; }
+  .sub { color: #6b7076; font-size: 13px; margin-bottom: 16px; }
+  textarea {
+    width: 100%; min-height: 26vh; padding: 12px; resize: vertical;
+    background: #1e2126; color: #e8eaed; border: 1px solid #2f343b;
+    border-radius: 8px; font: inherit;
+  }
+  select, input[type=text] {
+    font: inherit; padding: 7px 10px; border-radius: 8px;
+    background: #1e2126; color: #e8eaed; border: 1px solid #3a3f47;
+  }
+  label.ctl { display: inline-flex; align-items: center; gap: 6px; color: #b0b4b9; font-size: 13px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    background: #2a2e35; color: #e8eaed; border: 1px solid #3a3f47;
+  }
+  button:hover { background: #343941; }
+  button.primary { background: #3b6ef5; border-color: #3b6ef5; }
+  button:disabled { opacity: .45; cursor: default; }
+  .status { color: #9aa0a6; font-size: 13px; min-height: 1.4em; }
+  .spacer { flex: 1; }
+  progress { width: 100%; height: 8px; accent-color: #3b6ef5; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
+  th, td { border-bottom: 1px solid #2f343b; padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #9aa0a6; font-weight: 500; }
+  #env { font-size: 13px; color: #b0b4b9; background: #1a1d22; border: 1px solid #2f343b; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+  #env b { color: #e8eaed; }
+  #log {
+    background: #0f1114; border: 1px solid #2f343b; border-radius: 8px;
+    padding: 10px 14px; font: 12px/1.6 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto;
+    color: #b8bdc4;
+  }
+  .big { font-size: 15px; color: #f5c451; }
+</style>
+</head>
+<body>
+  <h1>reader — spike</h1>
+  <div class="sub">Kokoro-82M fully in-browser. Throwaway latency/capability probe — not the player.</div>
+
+  <div id="env">detecting environment…</div>
+
+  <div class="row">
+    <label class="ctl">Device <select id="device">
+      <option value="wasm">wasm</option>
+    </select></label>
+    <label class="ctl">Dtype <select id="dtype">
+      <option value="q8" selected>q8 (92 MB — wasm pick)</option>
+      <option value="fp32">fp32 (326 MB — webgpu pick)</option>
+      <option value="fp16">fp16 (163 MB)</option>
+      <option value="q4f16">q4f16 (154 MB)</option>
+      <option value="q4">q4 (305 MB)</option>
+    </select></label>
+    <label class="ctl">Voice <select id="voice"><option value="af_heart">af_heart</option></select></label>
+    <button id="load" class="primary">Load model</button>
+    <span class="spacer"></span>
+    <span id="status" class="status">idle</span>
+  </div>
+  <progress id="dlbar" max="1" value="0" style="display:none"></progress>
+
+  <textarea id="text" placeholder="Paste text here…">The bones of the old world lie just beneath the surface, waiting. Every city is built on the compressed wreckage of the ones that came before it, and nobody walking the streets gives a moment's thought to the strata under their feet.
+
+This is a second paragraph, included so the spike exercises multi-chunk synthesis. The first chunk is deliberately small, which means playback should begin quickly while the rest of the text is still being rendered in the background.</textarea>
+
+  <div class="row">
+    <button id="speak" class="primary" disabled>Speak</button>
+    <button id="clip" disabled>Read clipboard</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <span class="spacer"></span>
+    <span id="ttfa" class="status"></span>
+  </div>
+
+  <table id="timings">
+    <thead><tr><th>chunk</th><th>chars</th><th>synth ms</th><th>audio s</th><th>RTF</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="log"></div>
+
+<script type="module">
+import { chunkText } from "./chunker.js";
+
+const $ = s => document.querySelector(s);
+const logEl = $("#log");
+const log = m => {
+  logEl.textContent += m + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+};
+const status = m => { $("#status").textContent = m; };
+
+/* ---- environment report ---- */
+async function reportEnv() {
+  const bits = [];
+  bits.push(`UA: ${navigator.userAgent}`);
+  bits.push(`crossOriginIsolated: <b>${self.crossOriginIsolated}</b> (threads ${self.crossOriginIsolated ? "available" : "OFF — single-thread wasm"})`);
+  let gpu = "no navigator.gpu";
+  if (navigator.gpu) {
+    try {
+      const a = await navigator.gpu.requestAdapter();
+      gpu = a ? `adapter OK${a.info ? ` (${a.info.vendor || ""} ${a.info.architecture || ""})` : ""}` : "navigator.gpu present but no adapter";
+      if (a) {
+        const opt = document.createElement("option");
+        opt.value = "webgpu"; opt.textContent = "webgpu"; opt.selected = true;
+        $("#device").appendChild(opt);
+        pairDtype(true);   // webgpu default → fp32 (quant is garbled on webgpu)
+      }
+    } catch (e) { gpu = `adapter error: ${e.message}`; }
+  }
+  bits.push(`WebGPU: <b>${gpu}</b>`);
+  bits.push(`hardwareConcurrency: ${navigator.hardwareConcurrency}, memory: ${navigator.deviceMemory || "?"} GB`);
+  $("#env").innerHTML = bits.join("<br>");
+}
+reportEnv();
+
+/* ---- worker ---- */
+const worker = new Worker("./worker.js", { type: "module" });
+worker.onerror = e => {
+  status("worker failed to start");
+  log(`WORKER ERROR: ${e.message || "(no message)"} @ ${e.filename || "?"}:${e.lineno || "?"}`);
+};
+worker.onmessageerror = () => log("WORKER MESSAGE ERROR (structured clone failed)");
+let ready = false;
+let speakT0 = 0;
+let firstAudioReported = false;
+let stopped = false;
+
+/* Sequential playback queue: chunk audio arrives as Float32Array; encode WAV
+   blobs and chain them through one <audio> element (mirrors the real player). */
+const audioEl = new Audio();
+audioEl.preservesPitch = true;
+const queue = [];        // blob URLs in order
+let playing = false;
+function encodeWav(f32, rate) {
+  const len = f32.length;
+  const buf = new ArrayBuffer(44 + len * 2);
+  const v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); v.setUint32(4, 36 + len * 2, true); ws(8, "WAVE");
+  ws(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, "data"); v.setUint32(40, len * 2, true);
+  for (let i = 0; i < len; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+function pump() {
+  if (playing || stopped || !queue.length) return;
+  playing = true;
+  audioEl.src = queue.shift();
+  audioEl.play().then(() => {
+    if (!firstAudioReported) {
+      firstAudioReported = true;
+      const ms = performance.now() - speakT0;
+      $("#ttfa").innerHTML = `time-to-first-audio: <span class="big">${(ms / 1000).toFixed(2)}s</span>`;
+      log(`>>> TIME-TO-FIRST-AUDIO: ${(ms / 1000).toFixed(2)}s`);
+    }
+  }).catch(e => log(`play failed: ${e.message}`));
+}
+audioEl.onended = () => { playing = false; pump(); };
+
+worker.onmessage = e => {
+  const m = e.data;
+  if (m.type === "boot") log("worker booted");
+  else if (m.type === "load-progress") {
+    const bar = $("#dlbar");
+    bar.style.display = "";
+    const mb = b => (b / 1048576).toFixed(1);
+    if (m.total) {
+      bar.value = m.loaded / m.total;
+      status(`downloading ${m.file} — ${mb(m.loaded)}/${mb(m.total)} MB`);
+    } else {
+      // HF's xet CDN sends no content-length → indeterminate bar + MB counter
+      bar.removeAttribute("value");
+      status(`downloading ${m.file} — ${mb(m.loaded)} MB so far`);
+    }
+  } else if (m.type === "ready") {
+    ready = true;
+    $("#dlbar").style.display = "none";
+    status(`model ready (${m.device}/${m.dtype})`);
+    log(`model loaded in ${(m.loadMs / 1000).toFixed(1)}s  device=${m.device} dtype=${m.dtype}`);
+    if (m.voices?.length) {
+      const sel = $("#voice");
+      sel.innerHTML = "";
+      for (const v of m.voices) {
+        const o = document.createElement("option");
+        o.value = o.textContent = v;
+        o.selected = v === "af_heart";
+        sel.appendChild(o);
+      }
+      log(`voices: ${m.voices.join(", ")}`);
+    }
+    $("#speak").disabled = $("#clip").disabled = false;
+  } else if (m.type === "chunk") {
+    if (stopped) return;
+    const rtf = (m.synthMs / 1000) / m.audioSec;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${m.i + 1}/${m.n}</td><td>${m.chars ?? ""}</td>` +
+      `<td>${m.synthMs.toFixed(0)}</td><td>${m.audioSec.toFixed(1)}</td><td>${rtf.toFixed(2)}×</td>`;
+    $("#timings tbody").appendChild(tr);
+    log(`chunk ${m.i + 1}/${m.n}: ${m.synthMs.toFixed(0)}ms for ${m.audioSec.toFixed(1)}s audio (RTF ${rtf.toFixed(2)})`);
+    if (m.probe) {
+      log(`--- generate() output probe ---`);
+      log(`keys: ${m.probe.keys.join(", ")}`);
+      log(`timestamp-ish keys: ${m.probe.suspicious.length ? m.probe.suspicious.join(", ") : "NONE FOUND"}`);
+    }
+    queue.push(encodeWav(m.audio, m.sampleRate));
+    pump();
+  } else if (m.type === "synth-done") {
+    status("synthesis complete");
+  } else if (m.type === "error") {
+    status(`error in ${m.where}`);
+    log(`ERROR (${m.where}): ${m.message}`);
+  }
+};
+
+/* ---- device/dtype pairing: quantized dtypes are garbled on WebGPU
+   (upstream hexgrad/kokoro#98), so follow the official demo: wasm→q8,
+   webgpu→fp32. Selecting a mismatch shows a warning but is allowed —
+   hearing the garble is a legitimate spike experiment. ---- */
+const RECOMMENDED = { wasm: "q8", webgpu: "fp32" };
+function pairDtype(forceRecommended) {
+  const dev = $("#device").value;
+  if (forceRecommended) $("#dtype").value = RECOMMENDED[dev] || "q8";
+  const mismatch = dev === "webgpu" && $("#dtype").value !== "fp32";
+  status(mismatch ? "⚠ quantized dtypes produce garbled audio on WebGPU (upstream bug)" : "idle");
+}
+$("#device").onchange = () => pairDtype(true);
+$("#dtype").onchange = () => pairDtype(false);
+
+/* ---- wiring ---- */
+$("#load").onclick = () => {
+  $("#load").disabled = true;
+  status("loading model…");
+  log(`loading model  device=${$("#device").value} dtype=${$("#dtype").value}`);
+  worker.postMessage({ type: "load", device: $("#device").value, dtype: $("#dtype").value });
+};
+
+function speak(text) {
+  text = (text || "").trim();
+  if (!text || !ready) return;
+  stopped = false; firstAudioReported = false;
+  queue.length = 0; playing = false;
+  $("#timings tbody").innerHTML = "";
+  $("#ttfa").textContent = "";
+  const chunks = chunkText(text);
+  log(`\nspeak: ${text.length} chars → ${chunks.length} chunks (first=${chunks[0].length} chars)`);
+  status("synthesizing…");
+  $("#stopBtn").disabled = false;
+  speakT0 = performance.now();
+  worker.postMessage({ type: "synth", id: Date.now(), chunks, voice: $("#voice").value, speed: 1.0 });
+}
+$("#speak").onclick = () => speak($("#text").value);
+$("#clip").onclick = async () => {
+  try { const t = await navigator.clipboard.readText(); $("#text").value = t; speak(t); }
+  catch (e) { status("clipboard blocked — paste manually"); }
+};
+$("#stopBtn").onclick = () => {
+  stopped = true; queue.length = 0;
+  audioEl.pause(); audioEl.removeAttribute("src"); audioEl.load();
+  playing = false;
+  status("stopped (worker may still be finishing current chunk)");
+};
+</script>
+</body>
+</html>
