@@ -2,9 +2,14 @@
 // paragraph, then sentence, boundaries. The first chunk is intentionally small
 // so playback can start almost immediately; later chunks grow to reduce the
 // number of synth calls.
+//
+// Ramped targets (spike finding, 2026-07-02): jumping straight from a small
+// first chunk to 400 chars left an audible gap — chunk 1's playback (~4s)
+// ended before chunk 2's synthesis (~10s) finished. Ramping 140→260→400 lets
+// the audio buffer build ahead of the playhead.
 
-const FIRST_TARGET = 140;
-const TARGET = 400;
+export const TARGET_RAMP = [140, 260];
+export const TARGET = 400;
 const HARD_MAX = 700;
 
 const PARA = /\n\s*\n/;
@@ -43,12 +48,14 @@ export function chunkText(text) {
 
   const chunks = [];
   let buf = "";
-  let target = FIRST_TARGET;
+  let ramp = 0;
+  let target = TARGET_RAMP[0];
   for (const s of sents) {
     if (buf && buf.length + 1 + s.length > target) {
       chunks.push(buf);
       buf = s;
-      target = TARGET;
+      ramp++;
+      target = ramp < TARGET_RAMP.length ? TARGET_RAMP[ramp] : TARGET;
     } else {
       buf = `${buf} ${s}`.trim();
     }
