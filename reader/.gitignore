@@ -1,1 +1,5 @@
 node_modules/
+
+# Built by `npm run build` (esbuild) — reproducible artifacts, never commit.
+app.bundle.js
+worker.bundle.js
