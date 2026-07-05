@@ -12,11 +12,18 @@ if (!/async function m\(/.test(slice)) { console.error("m() not in slice"); proc
 
 const header = [
   "// AUTO-EXTRACTED from kokoro-js@1.2.1 dist (verbatim) — do not hand-edit.",
-  "// Exposes kokoro's exact text->IPA pipeline for server-side phonemization, so",
-  "// Apple WebKit (which stalls loading espeak's WASM in-browser) can offload it",
-  "// to faramir and still run the model on-device. Regenerate via",
+  "// Kokoro's exact text->IPA pipeline (normalize, punctuation split, espeak,",
+  "// post-processing) with a PLUGGABLE espeak backend. Default backend is the",
+  "// `phonemizer` package (what kokoro-js itself uses — Node/staging and",
+  "// non-Apple browsers). Apple WebKit stalls loading phonemizer's espeak WASM,",
+  "// so the reader's worker swaps in the espeak-ng npm build there via",
+  "// setPhonemizeBackend() (see espeak_backend.js). Regenerate via",
   "// extract_phonemize.mjs if kokoro-js bumps.",
-  'import { phonemize as l } from "phonemizer";',
+  'import { phonemize as phonemizerPkg } from "phonemizer";',
+  "",
+  "// backend contract: (text, espeakLang) -> Promise<string[]> of IPA lines",
+  "let l = phonemizerPkg;",
+  "export function setPhonemizeBackend(fn) { l = fn; }",
   "",
 ].join("\n");
 

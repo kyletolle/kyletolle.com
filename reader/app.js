@@ -44,6 +44,12 @@ const cloudSource = new CloudUnrealSource({
   getVoice: () => $("#voice").value || "Scarlett",
   getPassword: () => ($("#cloudkey") ? $("#cloudkey").value : ""),
 });
+// Wire the kokoro source's log/status NOW — player.setSource() attaches it
+// later, but model loads run before any setSource, and without this every
+// boot/load message (including load ERRORS) went to a no-op context. That's
+// how the 2026-07-05 HF outage presented as a logless infinite "loading
+// model…". setSource re-attaches to the player's identical sinks; harmless.
+kokoroSource.attach({ status: m => status0(m), log: m => log(m) });
 
 function showReader() {
   $("#composer").classList.add("hidden");
@@ -95,6 +101,13 @@ function requestLoad() {
       if (!isCloud()) populateVoices(kokoroVoices, localStorage.getItem("reader.voice") || "af_heart");
     }
     if (pendingSpeak != null) { const t = pendingSpeak; pendingSpeak = null; doSpeak(t); }
+  }).catch(err => {
+    // Surface the failure and re-arm: leaving loadRequested set would make
+    // every later Speak a silent no-op.
+    $("#dlbar").style.display = "none";
+    loadRequested = false;
+    pendingSpeak = null;
+    status0(`model load failed: ${err.message} — Speak retries; or switch Engine to cloud`);
   });
 }
 

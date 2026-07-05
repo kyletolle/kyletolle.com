@@ -41,6 +41,7 @@ export class KokoroWorkerSource {
     this.slots = [];            // deferred per chunk of the current job
     this.ready = false;
     this._loadResolve = null;
+    this._loadReject = null;
     this._onProgress = null;
     // heartbeat: a phone can take tens of seconds per chunk, so a silent
     // "synthesizing…" reads as a hang. Tick a live elapsed + ready count.
@@ -51,6 +52,7 @@ export class KokoroWorkerSource {
     worker.onerror = e => {
       this.ctx.status("worker failed to start");
       this.ctx.log(`WORKER ERROR: ${e.message || "(no message)"} @ ${e.filename || "?"}:${e.lineno || "?"}`);
+      this._loadFailed(new Error(e.message || "worker failed to start"));
     };
     worker.onmessage = e => this._onMessage(e.data);
   }
@@ -62,10 +64,20 @@ export class KokoroWorkerSource {
   load(device, dtype, onProgress) {
     this.ready = false;
     this._onProgress = onProgress || null;
-    return new Promise(res => {
+    return new Promise((res, rej) => {
       this._loadResolve = res;
+      this._loadReject = rej;
       this.worker.postMessage({ type: "load", device, dtype });
     });
+  }
+
+  // A load error must settle the load promise — otherwise the UI waits on
+  // "loading model…" forever with the failure invisible (the 2026-07-05 hang).
+  _loadFailed(err) {
+    if (!this._loadReject) return;
+    const rej = this._loadReject;
+    this._loadReject = null; this._loadResolve = null;
+    rej(err);
   }
 
   _hb() {
@@ -107,7 +119,15 @@ export class KokoroWorkerSource {
     if (m.type === "ready") {
       this.ready = true;
       this.ctx.log(`model loaded in ${(m.loadMs / 1000).toFixed(1)}s  device=${m.device} dtype=${m.dtype} threads=${m.threads}/${m.cores} isolated=${m.isolated}${m.apple ? " apple=1(single-thread)" : ""}`);
-      if (this._loadResolve) { this._loadResolve(m); this._loadResolve = null; }
+      if (this._loadResolve) { this._loadResolve(m); this._loadResolve = null; this._loadReject = null; }
+      return;
+    }
+    if (m.type === "error" && this._loadReject) {
+      // Load failure — there's no job yet, so handle it before the job guard
+      // below (which would silently drop it, and did until 2026-07-05).
+      this.ctx.status("model load failed — see debug log");
+      this.ctx.log(`ERROR (${m.where}): ${m.message}`);
+      this._loadFailed(new Error(m.message));
       return;
     }
     // Everything below is job-scoped; ignore stragglers from a superseded job.

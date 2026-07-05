@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- HF's CDN 404s requests with *.workers.dev referers (2026-07-05) — never send one.
+     The Worker also stamps Referrer-Policy: no-referrer (needed for the synth worker;
+     a meta tag only governs the document). -->
+<meta name="referrer" content="no-referrer">
 <title>reader</title>
 <script>
 // Relative imports need a trailing slash on the directory URL; some proxies

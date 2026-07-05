@@ -21,6 +21,10 @@ import { env as hfEnv } from "@huggingface/transformers";
 // blows the limit at ~370 chars while simple prose fits at 400+). We measure
 // with the same phonemizer kokoro-js uses and sub-split oversized chunks.
 import { phonemize } from "phonemizer";
+// Apple fallback: kokoro's exact pipeline with the espeak-ng npm build swapped
+// in for the phonemizer package (whose espeak WASM load stalls Apple WebKit).
+import { phonemizePieces, setPhonemizeBackend } from "./server_phonemize.mjs";
+import { espeakPhonemize, espeakWarm } from "./espeak_backend.js";
 
 const MAX_PH = 440;   // phoneme-char budget per generate() call, with margin
 
@@ -66,20 +70,20 @@ function withTimeout(p, ms, label) {
 
 let tts = null;
 let currentJob = null;   // newest synth id wins; older loops exit at next await
-let serverMode = false;  // true once local phonemization is known to stall (Apple WebKit)
+let espeakMode = false;  // true once local phonemization is known to stall (Apple WebKit)
+let espeakAnnounced = false;
 
-// Offload phonemization to the staging server (faramir runs espeak fine) and
-// return kokoro-IPA strings, one per token-budget piece. Same-origin POST.
-async function serverPhonemize(text, voice) {
-  const r = await fetch(new URL("phonemize", self.location.href), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text, voice }),
-  });
-  if (!r.ok) throw new Error(`phonemize server HTTP ${r.status}`);
-  const { pieces, error } = await r.json();
-  if (error) throw new Error(`phonemize server: ${error}`);
-  return pieces;
+// Phonemize via kokoro's own pipeline with the espeak-ng backend (fully local
+// — replaced the server-side phonemize shim 2026-07-05). Returns kokoro-IPA
+// strings, one per token-budget piece.
+async function espeakPieces(text, voice) {
+  if (!espeakAnnounced) {
+    espeakAnnounced = true;
+    self.postMessage({ type: "info", message: "espeak-ng backend: fetching wasm (~19 MB, one-time, cached)" });
+    setPhonemizeBackend(espeakPhonemize);
+  }
+  const lang = (voice || "af_heart").startsWith("b") ? "b" : "a";
+  return phonemizePieces(text, lang);
 }
 
 self.onmessage = async e => {
@@ -100,10 +104,11 @@ self.onmessage = async e => {
       const cores = self.navigator?.hardwareConcurrency || 4;
       let threads = self.crossOriginIsolated ? Math.min(Math.max(cores - 1, 1), 8) : 1;
       if (isApple) threads = 1;
-      // Detected Apple WebKit can't run espeak in-browser — go straight to the
-      // server phonemizer so it skips the 20s local-stall wait. Undetected Apple
-      // (iPadOS desktop UA) still gets caught by the timeout fallback below.
-      if (isApple) serverMode = true;
+      // Detected Apple WebKit can't run the phonemizer package's espeak — go
+      // straight to the espeak-ng backend so it skips the 20s local-stall wait,
+      // and start the wasm fetch now so it overlaps the model download.
+      // Undetected Apple (iPadOS desktop UA) is caught by the timeout fallback.
+      if (isApple) { espeakMode = true; espeakWarm(); }
       try { hfEnv.backends.onnx.wasm.numThreads = threads; } catch {}
       const t0 = performance.now();
       tts = await KokoroTTS.from_pretrained(
@@ -140,23 +145,24 @@ self.onmessage = async e => {
           const speed = msg.speed || 1.0;
           self.postMessage({ type: "synth-progress", id: msg.id, i, stage: "phonemize" });
 
-          // `pieces` is either raw text (local espeak works) or pre-phonemized
-          // IPA strings (server fallback). `phonemed` says which, so the loop
-          // below picks generate() vs tokenizer + generate_from_ids.
+          // `pieces` is either raw text (phonemizer package works locally) or
+          // pre-phonemized IPA strings (espeak-ng backend). `phonemed` says
+          // which, so the loop below picks generate() vs tokenizer +
+          // generate_from_ids.
           let pieces, phonemed = false;
-          if (!serverMode) {
+          if (!espeakMode) {
             // 20s is generous for phonemization (it's espeak *init* that hangs,
-            // not the work); a real device finishes in seconds. On stall, flip to
-            // the server for the rest of the session.
+            // not the work); a real device finishes in seconds. On stall, flip
+            // to the espeak-ng backend for the rest of the session.
             try {
               pieces = await withTimeout(safePieces(msg.chunks[i]), 20000, "phonemizer (espeak init)");
             } catch (err) {
-              serverMode = true;
-              self.postMessage({ type: "info", message: `local phonemizer stalled (${err.message}) — switching to server phonemization for this session` });
+              espeakMode = true;
+              self.postMessage({ type: "info", message: `local phonemizer stalled (${err.message}) — switching to the espeak-ng backend for this session` });
             }
           }
-          if (serverMode) {
-            pieces = await serverPhonemize(msg.chunks[i], voice);
+          if (espeakMode) {
+            pieces = await espeakPieces(msg.chunks[i], voice);
             phonemed = true;
           }
 
