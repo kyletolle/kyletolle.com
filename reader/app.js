@@ -151,8 +151,13 @@ async function reportEnv() {
   $("#env").innerHTML = bits.join("<br>");
 }
 
-/* ---- device/dtype pairing (wasm→q8, webgpu→fp16; see reportEnv note) ---- */
-const RECOMMENDED = { wasm: "q8", webgpu: "fp16" };
+/* ---- device/dtype pairing (wasm→q8/fp16, webgpu→fp16; see reportEnv note) ---- */
+// Apple's wasm CPU path runs fp16 markedly faster than q8 — ORT-web's int8
+// kernels carry dequantization overhead that loses to fp16 there (Kyle measured
+// ~4× on iPhone 2026-07-05). Costs a larger one-time download (163 MB vs 92 MB),
+// then cached. This is the WASM fp16 model — NOT WebGPU fp16, which garbles to
+// static on iOS (that path stays cloud-only). Desktop keeps q8's smaller download.
+const RECOMMENDED = { wasm: APPLE_MOBILE ? "fp16" : "q8", webgpu: "fp16" };
 function pairDtype(force) {
   if (force) $("#dtype").value = RECOMMENDED[$("#device").value] || "q8";
   const mismatch = $("#device").value === "webgpu" && /^q/.test($("#dtype").value);
