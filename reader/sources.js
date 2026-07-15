@@ -160,12 +160,12 @@ export class KokoroWorkerSource {
   }
 }
 
-/* ---- cloud (Unreal Speech), via a same-origin /tts proxy that holds the key
-   and returns mp3 + real per-word timestamps ---- */
+/* ---- cloud (Inworld TTS-2 / Unreal Speech), via a same-origin /tts proxy
+   that holds the keys and returns mp3 + real per-word timestamps ---- */
 const AUTH_MSG = "cloud password rejected — check the Password field";
 
-export class CloudUnrealSource {
-  // opts: { endpoint = "tts", getVoice, getPassword }
+export class CloudSource {
+  // opts: { endpoint = "tts", getEngine, getVoice, getPassword }
   constructor(opts = {}) {
     this.opts = opts;
     this.ctx = { status() {}, log() {} };
@@ -175,8 +175,9 @@ export class CloudUnrealSource {
 
   attach(ctx) { this.ctx = ctx; }
 
-  // Unreal splits on whitespace like our chunker, so words line up 1:1. On any
-  // mismatch, return null and let the player's length-weighted estimate stand.
+  // The proxy aligns the engine's tokens onto a /\s+/ split of the chunk text
+  // (same split our chunker makes), so words line up 1:1. On any mismatch,
+  // return null and let the player's length-weighted estimate stand.
   _realTimings(spanWords, apiWords) {
     if (!apiWords.length || apiWords.length !== spanWords.length) return null;
     return apiWords.map(w => ({ start: w.start, end: w.end }));
@@ -194,7 +195,9 @@ export class CloudUnrealSource {
   cancel() { this.job = null; }
 
   async _run(job) {
-    const voice = (this.opts.getVoice && this.opts.getVoice()) || "Scarlett";
+    const engine = (this.opts.getEngine && this.opts.getEngine()) || "inworld";
+    const voice = (this.opts.getVoice && this.opts.getVoice()) ||
+      (engine === "unreal" ? "Scarlett" : "Malcolm");
     const endpoint = this.opts.endpoint || "tts";
     const pass = (this.opts.getPassword && this.opts.getPassword()) || "";
     let authFailed = false;
@@ -206,7 +209,7 @@ export class CloudUnrealSource {
         const r = await fetch(endpoint, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${pass}` },
-          body: JSON.stringify({ text: job.texts[i], voice }),
+          body: JSON.stringify({ text: job.texts[i], voice, engine }),
         });
         if (r.status === 401 || r.status === 403) { authFailed = true; throw new Error(AUTH_MSG); }
         const data = await r.json();
@@ -220,7 +223,7 @@ export class CloudUnrealSource {
           wordTimings: this._realTimings(job.chunks[i].words, words),
           duration,
         });
-        this.ctx.log(`chunk ${i + 1}/${job.texts.length}: ${words.length} words, ${duration.toFixed(1)}s (cloud/${voice})`);
+        this.ctx.log(`chunk ${i + 1}/${job.texts.length}: ${words.length} words, ${duration.toFixed(1)}s (${engine}/${voice})`);
       } catch (e) {
         if (this.job !== job) return;
         this.ctx.log(`chunk ${i + 1} FAILED (skipping): ${e.message}`);

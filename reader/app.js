@@ -6,17 +6,25 @@
 import { chunkText } from "./chunker.js";
 import { buildDocument } from "./mdrender.js";
 import { ReadAlong } from "./readalong.js";
-import { KokoroWorkerSource, CloudUnrealSource } from "./sources.js";
+import { KokoroWorkerSource, CloudSource } from "./sources.js";
 
 const $ = s => document.querySelector(s);
 
-/* ---- engines: on-device kokoro (wasm/webgpu) vs cloud (Unreal Speech) ---- */
+/* ---- engines: on-device kokoro (wasm/webgpu) vs cloud (Inworld / Unreal) ----
+   "cloud" = Inworld TTS-2 (the default cloud engine since 2026-07-14 — Unreal
+   killed its PAYG tier); "cloud-unreal" keeps Unreal selectable until its free
+   chars dry up. A device with a saved reader.engine=cloud upgrades to Inworld
+   automatically. */
 const UNREAL_VOICES = ["Scarlett", "Dan", "Liv", "Will", "Amy"];
+// Auditioned roster, verdict order (2026-07-14): Malcolm won.
+const INWORLD_VOICES = ["Malcolm", "Blake", "Hades", "Elliot", "Victor",
+  "Cedric", "Conrad", "Jake", "Clive", "Alaric", "Damon", "Levi"];
 const DEFAULT_KOKORO_VOICES = [...document.querySelectorAll("#voice option")].map(o => o.value);
 const APPLE_MOBILE = /iP(hone|od|ad)/.test(navigator.userAgent) ||
   (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 let kokoroVoices = [];
-const isCloud = () => $("#device").value === "cloud";
+const isCloud = () => $("#device").value.startsWith("cloud");
+const cloudEngine = () => $("#device").value === "cloud-unreal" ? "unreal" : "inworld";
 
 function populateVoices(list, want) {
   const sel = $("#voice");
@@ -39,9 +47,10 @@ const kokoroSource = new KokoroWorkerSource({
   workerUrl: "./worker.bundle.js",
   getVoice: () => $("#voice").value || "af_heart",
 });
-const cloudSource = new CloudUnrealSource({
+const cloudSource = new CloudSource({
   endpoint: "tts",
-  getVoice: () => $("#voice").value || "Scarlett",
+  getEngine: cloudEngine,
+  getVoice: () => $("#voice").value || "",
   getPassword: () => ($("#cloudkey") ? $("#cloudkey").value : ""),
 });
 // Wire the kokoro source's log/status NOW — player.setSource() attaches it
@@ -171,8 +180,18 @@ function onEngineChange() {
   $("#dtypeHint").classList.toggle("hidden", cloud);   // "downloads once" is a kokoro-only note
   $("#cloudKeyCtl").classList.toggle("hidden", !cloud);
   if (cloud) {
-    populateVoices(UNREAL_VOICES, localStorage.getItem("reader.cloudVoice") || "Scarlett");
-    status0("cloud engine (Unreal Speech) — no download");
+    const eng = cloudEngine();
+    // Per-engine voice memory; the unreal key falls back to the pre-Inworld
+    // "reader.cloudVoice" so a saved Scarlett/Dan choice survives the upgrade.
+    const saved = localStorage.getItem(`reader.cloudVoice.${eng}`) ||
+      (eng === "unreal" ? localStorage.getItem("reader.cloudVoice") : null);
+    if (eng === "unreal") {
+      populateVoices(UNREAL_VOICES, saved || "Scarlett");
+      status0("cloud engine (Unreal Speech) — no download");
+    } else {
+      populateVoices(INWORLD_VOICES, saved || "Malcolm");
+      status0("cloud engine (Inworld) — no download");
+    }
   } else {
     populateVoices(kokoroVoices.length ? kokoroVoices : DEFAULT_KOKORO_VOICES, localStorage.getItem("reader.voice") || "af_heart");
     pairDtype(true);
@@ -187,7 +206,7 @@ $("#clip").onclick = async () => {
 };
 $("#device").onchange = onEngineChange;
 $("#dtype").onchange = () => pairDtype(false);
-$("#voice").onchange = () => localStorage.setItem(isCloud() ? "reader.cloudVoice" : "reader.voice", $("#voice").value);
+$("#voice").onchange = () => localStorage.setItem(isCloud() ? `reader.cloudVoice.${cloudEngine()}` : "reader.voice", $("#voice").value);
 // Cloud access password: persisted same-origin so it survives reloads (it only
 // gates a TTS proxy, not a high-value secret). Sent as a Bearer header by the
 // cloud source.
@@ -241,7 +260,7 @@ if (!isCloud()) {
   const warm = localStorage.getItem("reader.warm");
   if (warm) {
     const [dev, dt] = warm.split("/");
-    if (dev !== "cloud" && [...$("#device").options].some(o => o.value === dev)) {
+    if (!dev.startsWith("cloud") && [...$("#device").options].some(o => o.value === dev)) {
       $("#device").value = dev;
       $("#dtype").value = dt;
       requestLoad();
