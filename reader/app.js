@@ -77,10 +77,12 @@ const player = new ReadAlong($("#reader"), cloudSource, {
   getMd: () => $("#md").checked,
   defaultSpeed: 1.5,
   speedKey: "reader.speed",
+  focus: true,               // offer the focus-mode ribbon (opt-in, persisted)
   onStatus: status0,
   onLog: log,
   onNewText: showComposer,
 });
+window.__ra = player;   // debug/test handle
 
 /* ---- model load (kokoro): drives the download bar + composer status, resolves
    on "ready", then flushes any speak queued behind the load ---- */
@@ -220,6 +222,7 @@ document.addEventListener("keydown", e => {
   if (e.code === "Space") { e.preventDefault(); player.togglePlay(); }
   else if (e.code === "ArrowLeft") { e.preventDefault(); player.skip(-10); }
   else if (e.code === "ArrowRight") { e.preventDefault(); player.skip(10); }
+  else if (e.code === "KeyF") { e.preventDefault(); player.toggleFocus(); }
 });
 
 $("#copyLog").onclick = async () => {
