@@ -12,7 +12,9 @@
 //             wordTimings|null, duration}
 //     opts    { prepare(text, md) → {html, chunks:[[word]]},
 //               getMd?() → bool, presets?, speedKey?, defaultSpeed?,
+//               compact?: bool (single-line transport + speed stepper),
 //               focus?: bool (offer the focus-mode ribbon), focusKey?,
+//               focusStyleKey?,
 //               onStatus?(msg), onLog?(msg), onFirstAudio?(ms), onNewText?() }
 //
 // The player drives synthesis through the source only; it never knows whether a
@@ -20,11 +22,12 @@
 
 import { silence, fmt } from "./audioutil.js";
 
-const DEFAULT_PRESETS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const DEFAULT_PRESETS = [1, 1.25, 1.5, 1.75, 2, 2.5, 2.75, 3];
 
-function controlsHTML(withNewText, withFocus) {
+// Focus-mode view: shared by both control variants. The ribbon (bump style)
+// and the rsvp trio (still style) live side by side; the active style shows one.
+function focusHTML() {
   return `
-  <div class="ra-pane"></div>
   <div class="ra-focus hidden">
     <div class="ra-focus-win">
       <div class="ra-ribbon"></div>
@@ -32,7 +35,13 @@ function controlsHTML(withNewText, withFocus) {
         <span class="w rs-prev"></span><span class="w rs-cur"></span><span class="w rs-next"></span>
       </div>
     </div>
-  </div>
+  </div>`;
+}
+
+function controlsHTML(withNewText, withFocus) {
+  return `
+  <div class="ra-pane"></div>
+  ${withFocus ? focusHTML() : ""}
   <div class="ra-controls">
     <input class="scrub ra-scrub" type="range" min="0" max="0" step="0.05" value="0">
     <div class="row">
@@ -54,6 +63,32 @@ function controlsHTML(withNewText, withFocus) {
       ${withFocus ? `<button data-ra="focus" title="Focus mode — the text flows past a fixed point (f)">Focus</button>
       <button data-ra="fstyle" class="hidden" title="Focus style — Bump slides the line one word at a time; Still swaps the word in place with no motion">Bump</button>` : ""}
       <button data-ra="stop">Stop</button>
+    </div>
+  </div>`;
+}
+
+// Compact transport (opts.compact): scrub + a single control line — seek ‹10 /
+// play / 10›, a prev/next speed stepper, time, stop. Drops «15 / 30» / replay to
+// fit narrow screens. The speed stepper (see _renderSpeeds) steps through the
+// presets and clamps at the ends, so 3× steps down to 2.75× rather than wrapping.
+function compactControlsHTML(withFocus) {
+  return `
+  <div class="ra-pane"></div>
+  ${withFocus ? focusHTML() : ""}
+  <div class="ra-controls compact">
+    <input class="scrub ra-scrub" type="range" min="0" max="0" step="0.05" value="0">
+    <div class="row transport compact-bar">
+      <button class="icon" data-ra="back10" title="Back 10s">‹10</button>
+      <button class="round primary" data-ra="play" title="Play / pause">▶</button>
+      <button class="icon" data-ra="fwd10" title="Forward 10s">10›</button>
+      <span class="ra-speeds spd-stepper"></span>
+      ${withFocus ? `<button class="icon" data-ra="focus" title="Focus mode — the text flows past a fixed point">◎</button>` : ""}
+      <span class="time ra-time">0:00 / 0:00</span>
+      <button class="icon" data-ra="stop" title="Stop">⏹</button>
+    </div>
+    <div class="row">
+      ${withFocus ? `<button class="icon hidden" data-ra="fstyle" title="Focus style — Bump slides the line one word at a time; Still swaps the word in place with no motion">Bump</button>` : ""}
+      <span class="status ra-status"></span>
     </div>
   </div>`;
 }
@@ -105,7 +140,9 @@ export class ReadAlong {
 
   /* ---- setup ---- */
   _build() {
-    this.root.innerHTML = controlsHTML(!!this.opts.onNewText, !!this.opts.focus);
+    this.root.innerHTML = this.opts.compact
+      ? compactControlsHTML(!!this.opts.focus)
+      : controlsHTML(!!this.opts.onNewText, !!this.opts.focus);
     const q = s => this.root.querySelector(s);
     this.el = {
       pane: q(".ra-pane"), controls: q(".ra-controls"), scrub: q(".ra-scrub"),
@@ -308,9 +345,46 @@ export class ReadAlong {
     fill(this.el.rsNext, this._ribSpans[g + 1]);
   }
 
+  // index of the current speed in presets; snaps to nearest if it isn't one
+  _speedIndex() {
+    const i = this.presets.indexOf(this.speed);
+    if (i >= 0) return i;
+    let best = 0, bd = Infinity;
+    this.presets.forEach((v, k) => { const d = Math.abs(v - this.speed); if (d < bd) { bd = d; best = k; } });
+    return best;
+  }
+
   _renderSpeeds() {
     const box = this.el.speeds;
     box.innerHTML = "";
+    if (this.opts.compact) {
+      // Prev/next stepper: nudge one preset at a time, clamped at the ends — from
+      // 3× you step down to 2.75×, never wrap around to 1×.
+      const prev = document.createElement("button");
+      prev.className = "icon"; prev.textContent = "‹"; prev.title = "Slower";
+      const val = document.createElement("span");
+      val.className = "spd-val";
+      const next = document.createElement("button");
+      next.className = "icon"; next.textContent = "›"; next.title = "Faster";
+      const render = () => {
+        val.textContent = this.speed + "×";
+        const i = this._speedIndex();
+        prev.disabled = i <= 0;
+        next.disabled = i >= this.presets.length - 1;
+      };
+      const step = d => {
+        const i = Math.min(this.presets.length - 1, Math.max(0, this._speedIndex() + d));
+        this.speed = this.presets[i];
+        this.audio.playbackRate = this.speed;
+        localStorage.setItem(this.speedKey, this.speed);
+        render();
+      };
+      prev.onclick = () => step(-1);
+      next.onclick = () => step(1);
+      box.append(prev, val, next);
+      render();
+      return;
+    }
     for (const v of this.presets) {
       const b = document.createElement("button");
       b.textContent = v + "×";
