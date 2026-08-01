@@ -1,7 +1,0 @@
-node_modules/
-
-# Built by `npm run build` (esbuild) — reproducible artifacts, never commit.
-app.bundle.js
-worker.bundle.js
-# Copied from node_modules/espeak-ng/dist by `npm run build` (18.5 MB).
-espeak-ng.wasm
